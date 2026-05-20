@@ -40,6 +40,10 @@ pip install -r requirements.txt
 
 A GPU is recommended. The code will use bf16 if supported, otherwise fp16 if CUDA is available, otherwise fp32.
 
+### Dataset access
+
+`cardiffnlp/x_sensitive` is a gated dataset on Hugging Face. You will need to request access on the dataset page and authenticate before running. Set `HF_TOKEN` in your environment (or run `huggingface-cli login`) so that `load_dataset` can pull the data.
+
 ## Usage
 
 Run a single grid cell by SLURM task ID (0 to 24):
@@ -57,6 +61,8 @@ Run standard inference without MC Dropout for a given training dropout rate (bas
 cd src
 python main.py --no-dropout-inference 0.0
 ```
+
+This trains a fresh model at the specified dropout rate and runs a single deterministic forward pass at inference. It does not reload weights from a prior MC Dropout run, so the comparison isolates the inference procedure given an independently trained model rather than holding the trained weights fixed.
 
 ## Output
 
@@ -82,6 +88,8 @@ src/
 
 ## Notes
 
-- `max_length` for tokenization is set to the 95th percentile of token counts across train and test, rather than a fixed value. This limits truncation on long examples while avoiding excessive padding on short ones.
+- `max_length` for tokenization is set to the 95th percentile of token counts across train and test, rather than a fixed value. This limits truncation on long examples while avoiding excessive padding on short ones. The `max_seq_length` field on `ExperimentalConfig` is not read by the data loader and exists only as a historical default; the tokenizer length comes from the 95th percentile pass. Will be fixed in the next iteration.
+- The `warmup_steps` field on `ExperimentalConfig` is passed to the Hugging Face `TrainingArguments` `warmup_ratio` argument. The value (0.1) is interpreted as a fraction of total training steps, not a step count. The field name is retained for backward compatibility with earlier configs. Will be fixed in the next iteration.
 - The `enable_dropout` context manager sets only `nn.Dropout` modules to train mode during inference, leaving the rest of the model in eval mode. This is the correct behavior for MC Dropout and avoids changing batch norm or other train-mode-only layers.
+- `MCDropoutTrainer.prediction_step` applies `enable_dropout` to every prediction call, which includes the per-epoch validation pass during training. This is intentional: model selection and early stopping operate under the same stochastic inference procedure used at test time, so the checkpoint chosen by `load_best_model_at_end` is the one that performs best under MC Dropout inference. Note that the per-epoch validation loss is a single stochastic sample rather than a T-pass average, so the early-stopping signal is noisier than a deterministic validation loss would be, and the noise grows with the dropout rate.
 - Early stopping is used during training with patience 3 on validation loss.
